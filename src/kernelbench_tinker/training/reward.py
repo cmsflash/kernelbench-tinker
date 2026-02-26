@@ -98,6 +98,12 @@ class RewardConfig:
     # Default: all warning checks from static_checker.WARNING_CHECKS
     static_checker_warnings: list[str] | None = None  # None = use defaults (all warning checks)
 
+    # ==========================================================================
+    # Reward clipping configuration
+    # ==========================================================================
+    reward_clip_min: float | None = None  # Lower bound on total reward (None = no clipping)
+    reward_clip_max: float | None = None  # Upper bound on total reward (None = no clipping)
+
 
 def format_reward(eval_result: "KernelEvalResult", config: RewardConfig) -> float:
     """
@@ -401,6 +407,11 @@ def compute_reward(
         l_reward = length_reward(eval_result, config)
         total += config.length_weight * l_reward
 
+    # Reward clipping
+    if config.reward_clip_min is not None:
+        total = max(total, config.reward_clip_min)
+    if config.reward_clip_max is not None:
+        total = min(total, config.reward_clip_max)
 
     return total
 
@@ -446,3 +457,35 @@ def compute_reward_breakdown(
         "static_checker_errors": static_checker_errors,
         "static_checker_warnings": static_checker_warnings,
     }
+
+
+def compute_discounted_returns(
+    step_scores: list[float],
+    gamma: float = 0.4,
+    aggregation: str = "sum",
+) -> list[float]:
+    """Compute discounted returns for multi-turn RL.
+
+    sum: R_t = S_t + gamma * R_{t+1}  (backward recursion)
+    max: R_t = max{ gamma^(i-t) * S_i }
+    """
+    if aggregation not in ("sum", "max"):
+        raise ValueError(f"Unknown aggregation mode: {aggregation!r}. Must be 'sum' or 'max'.")
+
+    if not step_scores:
+        return []
+
+    T = len(step_scores)
+
+    if aggregation == "sum":
+        returns = [0.0] * T
+        returns[-1] = step_scores[-1]
+        for t in range(T - 2, -1, -1):
+            returns[t] = step_scores[t] + gamma * returns[t + 1]
+        return returns
+
+    # aggregation == "max"
+    return [
+        max(gamma ** (i - t) * step_scores[i] for i in range(t, T))
+        for t in range(T)
+    ]
