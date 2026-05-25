@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -101,13 +102,28 @@ class EvalResult:
     best_speedup: float | None
 
 
+@dataclass
+class GeneratedKernel:
+    """Generation artifact for one eval sample."""
+
+    prompt_messages: list[renderers.Message]
+    renderer: str
+    raw_response: str
+    kernel_code: str
+    parsed_kernel: str
+    format_ok: bool
+    token_count: int
+    generation_s: float
+    stop_condition: str
+
+
 async def generate_kernel(
     sampling_client: tinker.SamplingClient,
     problem: KernelBenchProblem,
     renderer: renderers.Renderer,
     max_tokens: int,
     temperature: float,
-) -> str:
+) -> GeneratedKernel:
     """Generate a kernel for a problem."""
     # Build prompt
     messages = [
@@ -123,7 +139,9 @@ async def generate_kernel(
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    generation_start = time.perf_counter()
     result = await completer(observation, stop_condition)
+    generation_s = time.perf_counter() - generation_start
 
     # Parse response
     message, _ = renderer.parse_response(result.tokens)
@@ -132,8 +150,21 @@ async def generate_kernel(
     # Parse structured response (extracts <think> and <KERNEL> blocks)
     parsed = parse_structured_response(content)
 
-    # Return just the kernel code
-    return parsed.kernel if parsed.kernel else content
+    # Preserve existing eval behavior: if parsing fails, pass raw content to the
+    # evaluator so its markdown/code fallback can still attempt extraction.
+    kernel_code = parsed.kernel if parsed.kernel else content
+
+    return GeneratedKernel(
+        prompt_messages=messages,
+        renderer=getattr(renderer, "name", type(renderer).__name__),
+        raw_response=content,
+        kernel_code=kernel_code,
+        parsed_kernel=parsed.kernel,
+        format_ok=parsed.format_ok,
+        token_count=len(result.tokens),
+        generation_s=generation_s,
+        stop_condition=str(stop_condition),
+    )
 
 
 async def evaluate_problem(
@@ -147,13 +178,14 @@ async def evaluate_problem(
 
     for sample_idx in range(cfg.num_samples):
         # Generate kernel
-        kernel_code = await generate_kernel(
+        generated = await generate_kernel(
             sampling_client,
             problem,
             renderer,
             cfg.max_tokens,
             cfg.temperature if cfg.num_samples == 1 else 1.0,  # Use temp=1 for multiple samples
         )
+        kernel_code = generated.kernel_code
 
         # Evaluate
         eval_result = await evaluate_kernel_async(
@@ -172,16 +204,29 @@ async def evaluate_problem(
             timeout=cfg.modal_timeout,
         )
 
+        kernel_code_truncated = False
         if cfg.max_kernel_code_chars is None:
             kernel_code_logged = kernel_code
         elif len(kernel_code) > cfg.max_kernel_code_chars:
             kernel_code_logged = kernel_code[: cfg.max_kernel_code_chars] + "..."
+            kernel_code_truncated = True
         else:
             kernel_code_logged = kernel_code
 
         samples.append({
             "sample_id": sample_idx,
+            "prompt_messages": generated.prompt_messages,
+            "renderer": generated.renderer,
+            "response": {
+                "raw": generated.raw_response,
+                "kernel": generated.parsed_kernel,
+                "format_ok": generated.format_ok,
+                "token_count": generated.token_count,
+                "generation_s": generated.generation_s,
+                "stop_condition": generated.stop_condition,
+            },
             "kernel_code": kernel_code_logged,
+            "kernel_code_truncated": kernel_code_truncated,
             **eval_result,
         })
 
