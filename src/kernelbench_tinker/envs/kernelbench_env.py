@@ -427,6 +427,7 @@ class KernelBenchDatasetBuilder(RLDatasetBuilder):
     reward_correctness_weight: float = 0.3
     reward_speed_weight: float = 1.0
     reward_length_weight: float = 0.0
+    reward_partial_correctness: bool = True
 
     # Reward hacking detection (static checker)
     reward_enable_static_checker: bool = True
@@ -515,6 +516,7 @@ class KernelBenchDatasetBuilder(RLDatasetBuilder):
             correctness_weight=self.reward_correctness_weight,
             speed_weight=self.reward_speed_weight,
             length_weight=self.reward_length_weight,
+            partial_correctness=self.reward_partial_correctness,
             enable_static_checker=self.reward_enable_static_checker,
             static_checker_backend=self.reward_static_checker_backend or self.backend,
             static_checker_precision=self.reward_static_checker_precision or self.precision,

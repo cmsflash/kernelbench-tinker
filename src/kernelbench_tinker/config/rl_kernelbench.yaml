@@ -107,6 +107,7 @@ dataset_builder:
     reward_correctness_weight: 0.3
     reward_speed_weight: 1.0
     reward_length_weight: 0.0
+    reward_partial_correctness: true
 
     # ---------------------------------------------------------------------------
     # Reward Hacking Detection (Static Checker)

@@ -37,9 +37,10 @@ class RewardConfig:
     Configuration for reward computation.
 
     Default values follow the published KernelBench RL setup:
-    - Reward = 0.3 * correct + speedup (if correct)
+    - Bad format receives a negative reward
+    - Compile failure receives a negative reward
+    - Correctness receives partial credit
     - No length penalties (can cause response collapse)
-    - Binary correctness (no partial credit)
     """
 
     # ==========================================================================
@@ -52,7 +53,8 @@ class RewardConfig:
     speed_weight: float = 1.0  # Adds speedup directly
     length_weight: float = 0.0  # Length penalties can cause response collapse
 
-    format_penalty: float = 0.0  # Zero reward for bad format
+    format_penalty: float = -2.0
+    compile_penalty: float = -1.0
 
     # ==========================================================================
     # Speed reward configuration
@@ -73,10 +75,9 @@ class RewardConfig:
 
     # ==========================================================================
     # Correctness configuration
-    # Binary correctness (all tests pass or not)
     # ==========================================================================
     sparse_rewards: bool = False
-    partial_correctness: bool = False  # Binary correctness
+    partial_correctness: bool = True
 
     # ==========================================================================
     # Reward hacking detection configuration (static checker)
@@ -118,12 +119,12 @@ def compile_reward(eval_result: "KernelEvalResult", config: RewardConfig) -> flo
 
     Returns:
         1.0 if compiled successfully
-        0.0 if compilation failed
+        config.compile_penalty if compilation failed
     """
     if eval_result["compiled"]:
         return 1.0
 
-    return 0.0
+    return config.compile_penalty
 
 
 def correctness_reward(eval_result: "KernelEvalResult", config: RewardConfig) -> float:
@@ -167,7 +168,6 @@ def speed_reward(
 
     Only gives reward if:
     - use_speed is True
-    - Kernel is fully correct
     - Speedup data is available
 
     Args:
@@ -179,10 +179,6 @@ def speed_reward(
         Speed reward (0.0 if not applicable)
     """
     if not use_speed:
-        return 0.0
-
-    # Only reward speed for fully correct kernels
-    if not eval_result["correctness"]:
         return 0.0
 
     speedup = eval_result.get("speedup")
@@ -303,9 +299,10 @@ def compute_reward(
         S = 0.3 * correct + (T_baseline/T_kernel) * correct
 
     Key behaviors:
-    - Zero reward for incorrect kernels
-    - Binary correctness (no partial credit by default)
-    - Speedup added linearly (not log-scaled)
+    - Negative reward for invalid format or compile failure
+    - Partial correctness by default
+    - Full correctness receives max correctness reward without speed reward
+    - Incomplete correctness can receive speed reward on top of max correctness reward
     - Zero reward if reward hacking detected (static checker errors)
 
     Args:
@@ -321,10 +318,13 @@ def compute_reward(
         config = RewardConfig()
 
     # ==========================================================================
-    # Zero reward for bad format
+    # Bad format and compile failures receive explicit negative rewards.
     # ==========================================================================
     if not eval_result["format_ok"]:
-        return 0.0
+        return config.format_penalty
+
+    if not eval_result["compiled"]:
+        return config.compile_penalty
 
     # ==========================================================================
     # Check for reward hacking (static checker)
@@ -355,10 +355,6 @@ def compute_reward(
     if config.sparse_rewards:
         if eval_result["correctness"]:
             base_reward = 1.0
-            # Add speed bonus if enabled
-            if config.speed_weight > 0:
-                s_reward = speed_reward(eval_result, config, use_speed=True)
-                base_reward += config.speed_weight * s_reward
             # Add length bonus for tie-breaking (disabled by default)
             if config.length_weight > 0:
                 l_reward = length_reward(eval_result, config)
@@ -375,17 +371,17 @@ def compute_reward(
     # Correctness reward (binary by default)
     corr_reward = correctness_reward(eval_result, config)
 
-    # If not correct, zero reward
-    if corr_reward == 0.0:
-        return 0.0
+    if corr_reward >= 1.0:
+        total = config.correctness_weight
+    else:
+        total = config.correctness_weight * corr_reward
 
-    # Base reward for correctness
-    total = config.correctness_weight * corr_reward
-
-    # Add speedup reward (only for correct kernels)
-    if config.speed_weight > 0:
+    # Speed reward is only added for incomplete correctness, and if present it is
+    # added on top of the maximum correctness reward rather than partial credit.
+    if corr_reward < 1.0 and config.speed_weight > 0:
         s_reward = speed_reward(eval_result, config, use_speed=True)
-        total += config.speed_weight * s_reward
+        if s_reward > 0:
+            total = config.correctness_weight + config.speed_weight * s_reward
 
     # Optional: format/compile rewards (disabled by default)
     if config.format_weight > 0:
