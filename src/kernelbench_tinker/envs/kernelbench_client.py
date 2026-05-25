@@ -23,7 +23,7 @@ _EVAL_CACHE: OrderedDict[str, "KernelEvalResult"] = OrderedDict()
 
 # Kernel block pattern - code inside <KERNEL>...</KERNEL>
 KERNEL_BLOCK_PATTERN = re.compile(
-    r"<KERNEL>\s*```(?:cuda|python|cpp)?\s*\n?(.*?)```\s*</KERNEL>",
+    r"<KERNEL>\s*```(?:[\w.+#-]+)?\s*\n?(.*?)```\s*</KERNEL>",
     re.DOTALL | re.IGNORECASE
 )
 
@@ -118,9 +118,47 @@ class KernelEvalResult(TypedDict):
 
 
 
+def _strip_thinking_trace(text: str) -> str:
+    """Drop hidden/reasoning text before final-answer extraction."""
+    match = re.search(r"</think>", text, re.IGNORECASE)
+    if match:
+        return text[match.end():]
+    return re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+
+def _fenced_code_blocks(text: str, languages: list[str] | None = None) -> list[str]:
+    if languages is None:
+        languages = ["python", "cuda", "cpp", ""]
+
+    blocks: list[str] = []
+    for lang in languages:
+        if lang:
+            pattern = rf"```{lang}\s*\n(.*?)```"
+        else:
+            pattern = r"```\s*\n(.*?)```"
+        blocks.extend(
+            cast(str, match).strip()
+            for match in re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+        )
+    return blocks
+
+
+def _select_solution_block(blocks: list[str]) -> str | None:
+    """Pick the most likely final KernelBench solution from fenced blocks."""
+    for predicate in (
+        lambda block: "class ModelNew" in block and "def forward" in block,
+        lambda block: "class ModelNew" in block,
+        lambda block: "def forward" in block,
+    ):
+        matches = [block for block in blocks if predicate(block)]
+        if matches:
+            return matches[-1]
+    return None
+
+
 def extract_code_block(text: str, languages: list[str] | None = None) -> str | None:
     """
-    Extract the first code block from text.
+    Extract the most likely KernelBench solution code block from text.
 
     Args:
         text: The text containing code blocks
@@ -132,16 +170,18 @@ def extract_code_block(text: str, languages: list[str] | None = None) -> str | N
     if languages is None:
         languages = ["python", "cuda", "cpp", ""]
 
-    # Try to find fenced code blocks
-    for lang in languages:
-        if lang:
-            pattern = rf"```{lang}\s*\n(.*?)```"
-        else:
-            pattern = r"```\s*\n(.*?)```"
+    # Prefer final answer code over reasoning snippets.
+    stripped_text = _strip_thinking_trace(text)
+    solution = _select_solution_block(_fenced_code_blocks(stripped_text, languages))
+    if solution:
+        return solution
 
-        matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
-        if matches:
-            return cast(str, matches[0]).strip()
+    # If stripping removed too much or no </think> marker was present, inspect
+    # the full response before declaring a format failure.
+    if stripped_text != text:
+        solution = _select_solution_block(_fenced_code_blocks(text, languages))
+        if solution:
+            return solution
 
     # If no fenced block, try to find code that looks like a Python module
     # (contains class definitions, imports, etc.)
@@ -503,4 +543,3 @@ class KernelBenchProblem:
                 gpu_name=self.prompt_gpu_name,
             )
         return self._prompt
-

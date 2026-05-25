@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,10 @@ from kernelbench_tinker.training.models import get_renderer_name_for_model
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_MODEL_MAX_TOKENS = {
+    "Qwen/Qwen3.6-35B-A3B": 64245,
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": 31544,
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,7 @@ async def run_sample(
         return {
             "model": runtime.model,
             "sample_index": sample_index,
+            "max_tokens": max_tokens,
             "exception": repr(exc),
             "failure_stage": "generation_exception",
             "failure_reason": str(exc),
@@ -85,6 +90,7 @@ async def run_sample(
         num_correct_trials=1,
         measure_performance=False,
         timeout=modal_timeout,
+        cache_results=False,
     )
     eval_s = time.perf_counter() - eval_start
     wall_s = time.perf_counter() - sample_start
@@ -107,6 +113,7 @@ async def run_sample(
     return {
         "model": runtime.model,
         "sample_index": sample_index,
+        "max_tokens": max_tokens,
         "failure_stage": failure_stage,
         "failure_reason": failure_reason,
         "wall_s": wall_s,
@@ -160,7 +167,13 @@ def summarize(
         "models": models,
         "requested_by_model": requested_by_model,
         "requested_total_concurrency": sum(requested_by_model.values()),
-        "max_tokens": max_tokens,
+        "max_tokens_by_model": {
+            model: max(
+                (int(r.get("max_tokens", max_tokens)) for r in results if r.get("model") == model),
+                default=max_tokens,
+            )
+            for model in models
+        },
         "wall_s": wall_s,
         "throughput_per_min": total / wall_s * 60 if wall_s else 0,
         "exceptions": sum(1 for r in results if r.get("exception")),
@@ -186,7 +199,7 @@ async def run_condition(
     runtimes: dict[str, ModelRuntime],
     problem: KernelBenchProblem,
     requested_by_model: dict[str, int],
-    max_tokens: int,
+    max_tokens_by_model: dict[str, int],
     temperature: float,
     modal_timeout: float,
 ) -> dict[str, Any]:
@@ -199,7 +212,7 @@ async def run_condition(
                     runtime=runtimes[model],
                     problem=problem,
                     sample_index=sample_index,
-                    max_tokens=max_tokens,
+                    max_tokens=max_tokens_by_model[model],
                     temperature=temperature,
                     modal_timeout=modal_timeout,
                 )
@@ -212,7 +225,7 @@ async def run_condition(
         label=label,
         models=list(requested_by_model),
         requested_by_model=requested_by_model,
-        max_tokens=max_tokens,
+        max_tokens=max(max_tokens_by_model.values()),
         wall_s=wall_s,
         results=results,
     )
@@ -271,7 +284,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     runtimes=runtimes,
                     problem=problem,
                     requested_by_model={model: concurrency},
-                    max_tokens=args.max_tokens,
+                    max_tokens_by_model=model_max_tokens(args),
                     temperature=args.temperature,
                     modal_timeout=args.modal_timeout,
                 )
@@ -283,7 +296,7 @@ async def main_async(args: argparse.Namespace) -> None:
             runtimes=runtimes,
             problem=problem,
             requested_by_model={models[0]: 4, models[1]: 4},
-            max_tokens=args.max_tokens,
+            max_tokens_by_model=model_max_tokens(args),
             temperature=args.temperature,
             modal_timeout=args.modal_timeout,
         )
@@ -298,6 +311,13 @@ def short_model_name(model: str) -> str:
         .replace(".", "")
         .replace("-", "_")
     )
+
+
+def model_max_tokens(args: argparse.Namespace) -> dict[str, int]:
+    overrides = dict(DEFAULT_MODEL_MAX_TOKENS)
+    if args.model_max_tokens_json:
+        overrides.update(json.loads(args.model_max_tokens_json))
+    return {model: overrides.get(model, args.max_tokens) for model in args.models}
 
 
 def parse_args() -> argparse.Namespace:
@@ -316,6 +336,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-include-hardware", action="store_true")
     parser.add_argument("--prompt-gpu-name")
     parser.add_argument("--max-tokens", type=int, default=64245)
+    parser.add_argument(
+        "--model-max-tokens-json",
+        help="Optional JSON object mapping model names to per-model max output tokens.",
+    )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--modal-gpu-type", default="A100")
     parser.add_argument("--modal-timeout", type=float, default=120.0)

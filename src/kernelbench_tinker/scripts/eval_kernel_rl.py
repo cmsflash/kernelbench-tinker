@@ -36,6 +36,7 @@ from kernelbench_tinker.envs.kernelbench_client import (
     get_problem_ids,
     parse_structured_response,
 )
+from kernelbench_tinker.envs.prompts import DEFAULT_SYSTEM_PROMPT
 from kernelbench_tinker.training.models import get_renderer_name_for_model
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ async def generate_kernel(
     """Generate a kernel for a problem."""
     # Build prompt
     messages = [
-        {"role": "system", "content": "You are an expert GPU kernel developer."},
+        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
         {"role": "user", "content": problem.prompt},
     ]
     observation = renderer.build_generation_prompt(messages)
