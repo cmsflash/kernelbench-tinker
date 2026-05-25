@@ -1,19 +1,5 @@
 # Experiments
 
-## Live Experiment Table
-
-I will keep this table updated as new validation runs complete. Detailed notes and interpretations stay in the sections below.
-
-| ID | Type | Model(s) | Problem | Concurrency | N | Max tokens | Wall | Throughput | Compiled | Correct | Hit cap | Notes |
-|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| base_qwen36_a3b_l1p1 | single eval | Qwen/Qwen3.6-35B-A3B | L1.1 | 1 | 1 | 4096 |  |  | 1/1 | 0/1 | 0 | Output mismatch |
-| train_smoke_qwen36_a3b | RL smoke | Qwen/Qwen3.6-35B-A3B | L1.1 | 2 traj | 1 batch | 2048 | 57.3s |  | 0/2 | 0/2 |  | completed training batch; reward 0 |
-| qwen36_l1p1_sweep | end-to-end concurrency | Qwen/Qwen3.6-35B-A3B | L1.1 | 4 | sweep 1-8 | 4096 | 35.1s | 6.84/min | 0 | 0 |  | best observed c=4 |
-| modal_only_l1p1_sweep_to64 | Modal-only concurrency | fixed torch.matmul ModelNew | L1.1 | 64 | sweep 1-64 | n/a | 14.2s | 270.79/min | 64/64 | 64/64 | 0 | best throughput at requested c=64 |
-| problem1_32_c8 | sample study | Qwen/Qwen3.6-35B-A3B | L1.1 | 8 | 32 | 4096 | 166.2s | 11.55/min | 2/32 | 0/32 | 28 | mostly format extraction / truncation |
-| problem1_8_c8_maxtok | sample study max tokens | Qwen/Qwen3.6-35B-A3B | L1.1 | 8 | 8 | 64245 | 87.7s | 5.48/min | 2/8 | 0/8 | 0 | no token-cap hits; code quality failures |
-| l1p1_all_models_c8 | all supported models | 39 Tinker models | L1.1 | 8 | 39 | 4096 | 200.3s | 11.68/min | 5/39 | 0/39 | 10 | 0 correct; 5 compiled incorrect |
-
 ## 2026-05-25: KernelBench Problem 1 Validation And Modal Concurrency
 
 ### Setup
